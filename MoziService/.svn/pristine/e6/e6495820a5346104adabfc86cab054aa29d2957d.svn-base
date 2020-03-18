@@ -1,0 +1,115 @@
+# -*- coding:utf-8 -*-
+# TODO
+##########################################################################################################
+# File name : situation.py
+# Create date : 2020-1-8
+# Modified date : 2020-1-8
+#All rights reserved:北京华戍防务技术有限公司
+#Author:xy
+##########################################################################################################8
+import logging
+import time
+import random
+import json
+from datetime import datetime
+
+import pylog
+
+
+from MoziService.entitys.side import CSide as Side
+
+import json
+
+def get_red_missile_info(all_info_dict):
+    red_missile_info = {}
+    red_missile_guid = []
+    for guid in list(all_info_dict.keys()):
+        item = all_info_dict[guid]
+        if item["ClassName"] == "CAircraft":
+            red_missile_guid.append(guid)
+            red_missile_info[guid] = item
+    return red_missile_info
+
+
+class CSituation():
+    '''推演'''
+    def __init__(self):
+        """Constructor"""
+        self.all_guid =[]
+        self.all_info_dict = {}
+        self.red_info_dict = {}
+
+    def init_situation(self, mozi_task,scenario):
+        '''获取全局态势'''
+        load_success = False
+        for i in range(20):
+            load_result = mozi_task.sendAndRecv("Isload")
+            if load_result == "True":
+                load_success = True
+                break
+            time.sleep(1)
+        if not load_success:
+            logging.info("Interrupted, the situation object can not be created!")
+            return False
+
+        situation_str = mozi_task.sendAndRecv("GetAllState")
+        return self.parse_init_situation(situation_str,scenario)
+
+    def parse_init_situation(self, situation_str,scenario):
+        """
+        传入初始获取全局态势字符串，构建本地对象体系框架
+        :param situation_str:  str, 初始全局态势字符串
+        :return:
+        """
+
+        try:
+            situation_dict = json.loads(situation_str)
+            self.all_guid = list(situation_dict.keys())
+            self.all_info_dict = situation_dict
+            pylog.info(self.all_info_dict)
+
+            # 解析态势
+            #parse_side(situation_dict)
+            #parse_aircraft(situation_dict)
+
+        except Exception as e:
+            pylog.error("Failed to json initial situation' return %s" % e)
+            return False
+
+    def update_situation(self,mozi_task,scenario):
+        """
+        更新态势
+        :return:
+        """
+        update_data = mozi_task.sendAndRecv("UpdateState")
+        situation_data = self.parse_update_situation(update_data,scenario)
+        return situation_data
+
+    def parse_update_situation(self, update_data,scenario):
+        """
+        传入更新的态势字符串，解析后更新到本地框架对象中
+        :param update_data: str, 更新的态势字符串
+        :return:
+        """
+        if isinstance(update_data, str):
+            try:
+                situation_data = json.loads(update_data.strip())
+            except Exception as e:
+                pylog.error("Failed to json update situation's resturn:%s" % e)
+                return
+        else:
+            situation_data = update_data      
+        return situation_data
+
+    def update_red_info_dict(self, red_missile_info,red_info_dict):
+        for guid in list(red_missile_info.keys()):
+            item = red_missile_info[guid]
+            for key in list(item.keys()):
+                try:
+                    red_info_dict[guid][key] = red_missile_info[guid][key]
+                except Exception as e:
+                    pylog.error("error:%s key:%s" % (e, key))
+                    raise
+        self.red_info_dict = None
+        self.red_info_dict = red_info_dict
+

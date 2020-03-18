@@ -1,0 +1,112 @@
+# -*- coding:utf-8 -*-
+# TODO
+##########################################################################################################
+# File name : scenario.py
+# Create date : 2020-1-8
+# Modified date : 2020-1-8
+#All rights reserved:北京华戍防务技术有限公司
+#Author:xy
+##########################################################################################################
+
+from ..entitys.situation import CSituation
+#from ..entitys.side import CSide
+from .side  import CSide as Side
+from .unit import Unit
+
+class CScenario():
+    '''想定'''
+    def __init__(self, mozi_task):
+        self.mozi_task = mozi_task
+        # 类名
+        self.ClassName = "CCurrentScenario"
+        # GUID
+        self.strGuid = ""
+        # 标题
+        self.strTitle = ""
+        # 想定文件名
+        self.strScenFileName = ""
+        # 描述
+        self.strDescription = ""
+        # 当前时间
+        self.m_Time = ""
+        # 是否是夏令时
+        self.bDaylightSavingTime = False
+        # 当前想定第一次启动的开始时间
+        self.m_FirstTimeRunDateTime = ""
+        # 用不上
+        self.m_FirstTimeLastProcessed = 0.0
+        # 用不上
+        self.m_grandTimeLastProcessed = 0.0
+        # 夏令时开始时间（基本不用）
+        self.strDaylightSavingTime_Start = 0.0
+        # 夏令结束时间（基本不用）
+        self.strDaylightSavingTime_End = 0.0
+        # 想定开始时间
+        self.m_StartTime = ""
+        # 想定持续时间
+        self.m_Duration = ""
+        # 想定精细度
+        self.sMeta_Complexity = 1
+        # 想定困难度
+        self.sMeta_Difficulty = 1
+        # 想定发生地
+        self.strMeta_ScenSetting = ""
+        # 想定精细度的枚举类集合
+        self.strDeclaredFeatures = ""
+        # 想定的名称
+        self.strCustomFileName = ""
+        # 编辑模式剩余时间
+        self.iEditCountDown = 0
+        # 推演模式剩余时间
+        self.iStartCountDown = 0
+        # 暂停剩余时间
+        self.iSuspendCountDown = 0
+        # 获取推演的阶段模式
+        self.m_CurrentStage = 0
+        #推演方
+        self.m_sides={}
+        #态势
+        self.situation = CSituation()
+
+    def get_side_byname(self, side_name):
+        '''
+        根据名称获取方
+        '''
+        self.is_side(side_name)
+        return self.m_sides[side_name]
+
+    def lua_addSide(self, sideName):
+        '''
+        添加方 complate
+        :param sideName:
+        :return:
+        '''
+        return self.mozi_task.sendAndRecv("HS_LUA_AddSide({side='%s'})" % (sideName))
+
+    def scenEdit_removeSide(self, side):
+        '''
+        移除推演方
+        :param side:
+        :return:
+        '''
+        return self.mozi_task.sendAndRecv("ScenEdit_RemoveSide({side='%s'})" % (side))
+
+    def scenEdit_setSidePosture(self, sideAName, sideBName, relation):
+        '''
+        设置对抗关系 complate
+        :param sideAName:
+        :param sideBName:
+        :param relation:：字符串。立场编码（'F'-友好，'H'-敌对，'N'-中立，'U'-非友）
+        :return:
+        '''
+        return self.mozi_task.sendAndRecv("ScenEdit_SetSidePosture('{}','{}','{}')".format(sideAName, sideBName, relation))
+
+    def is_side(self,side_name):
+        '''
+        判断是否存在方,不存在创建
+        :return:
+        '''
+        side =Side(side_name)
+        side.iTotalScore = 0
+        side.unit = Unit()
+        self.m_sides[side_name]=side

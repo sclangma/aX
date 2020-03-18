@@ -1,0 +1,107 @@
+# -*- coding:utf-8 -*-
+# TODO
+##########################################################################################################
+# File name : group.py
+# Create date : 2020-1-8
+# Modified date : 2020-1-8
+#All rights reserved:北京华戍防务技术有限公司
+#Author:xy
+##########################################################################################################
+
+from ..entitys.activeunit import CActiveUnit
+
+
+class CGroup(CActiveUnit):
+    def __init__(self, guid, name, side_guid ,mozi_server):
+        super().mozi_server = mozi_server
+        self.guid =guid
+        self.name = name
+        self.m_GroupCenter = ""
+        self.strDockAircraft = ""
+        # 悬停速度
+        self.fHoverSpeed = 0.0
+        # 低速
+        self.fLowSpeed = 0.0
+        # 巡航
+        self.fCruiseSpeed = 0.0
+        # 军用/全速
+        self.fMilitarySpeed = 0.0
+        # 加速/最大
+        self.fAddForceSpeed = 0.0
+        # 期望高度
+        self.fDesiredAltitude = 0.0
+        # 是否在陆地上
+        self.bIsOnLand = False
+        # 航路点需要燃油数
+        self.strWayPointFuel = ""
+        # 编组领队
+        self.m_GroupLead = ""
+        # 编组类型
+        self.m_GroupType = 0
+        # 载艇按钮的文本描述
+        self.strDockShip = ""
+        # 编组所有单元GUID
+        self.m_UnitsInGroup = ""
+        # 航路点剩余航行距离
+        self.strWayPointDTG = ""
+        # 航路点描述
+        self.strWayPointDescription = ""
+        # 发送队形方案详情
+        self.m_FormationFormula = ""
+        # 航路点剩余航行时间
+        self.strWayPointTTG = ""
+        # 发送队形方案选择的索引
+        self.iFormationSelectedIndex = 0
+        # 航路点名称
+        self.strWayPointName = ""
+
+        # from dong
+        # 编组中心点经度
+        self.m_GroupCenterLongitude = ""
+        # 编组中心点纬度
+        self.m_GroupCenterLatitude = ""
+        # 编组中心点高度
+        self.m_GroupCenterAltitude_ASL = ""
+
+    def delete_sub_object(self):
+        """
+        删除时删除子对象
+        :return:
+        """
+        del_list = list(self.way_points.keys())
+        for guid, point in self.way_points.items():
+            del_list.extend(point.delete_sub_object())
+        del self.way_points
+
+        if self.doctrine is not None:
+            del_list.append(self.doctrine.guid)
+            del self.doctrine
+        return del_list
+    
+    
+    def removeUnitFromGroup(self, unitId):
+        '''
+        将单元移除编组
+        unitId 单元ID
+        '''
+        return self.mozi_server.sendAndRecv("Hs_RemoveUnitFromGroup('{}')".format(unitId))
+ 
+
+    def scenEdit_AddGroup(self, unitGuidList):
+        '''
+        将单元添加到新建的组
+        unitGuidList：单元的 guid，guid 之间用逗号分隔
+        用法：
+        Hs_ScenEdit_AddGroup({'613f00e1-4fd9-4715-a672-7ec5c22486cb','431337a9-987e-46b6-8cb8-2f92b9b80335','0bc3        1a3c-096a-4b8e-a
+        23d-46f7ba3b06b3'})
+        '''
+        res =  self.mozi_server.sendAndRecv("ReturnObj(Hs_ScenEdit_AddGroup({}))".format(unitGuidList))
+        return res.split('\r\n')[5].split('=')[1].split(',')[0].replace(',','').replace('\'','').replace(' ','').s  
+ 
+   
+    def groupFormation(self, table):
+        '''
+        编组设置队形
+        table 编组队形参数 {"2","686b0f99-533a-432c-9c24-e31e92d69afd","45","5",true}
+        '''           
+        return self.mozi_server.sendAndRecv("Hs_GroupFormation({})".format(table))

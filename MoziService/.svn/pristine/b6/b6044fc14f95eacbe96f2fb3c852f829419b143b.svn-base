@@ -1,0 +1,739 @@
+#!/usr/bin/env python3
+# -*- coding:utf-8 -*-
+# TODO
+##########################################################################################################
+# File name : side.py
+# Create date : 2020-1-8
+# Modified date : 2020-1-8
+#All rights reserved:北京华戍防务技术有限公司
+#Author:xy
+##########################################################################################################
+from abc import ABCMeta, abstractmethod
+import re
+import logging
+
+from ..entitys.mission import CMission
+from ..entitys.activeunit import CActiveUnit
+########################################################################
+class CSide():
+    '''方'''
+
+    #----------------------------------------------------------------------
+    def __init__(self, side_name,mozi_task):
+        """Constructor"""
+        self.mozi_task = mozi_task
+        self.__zone_index_increment = 1  # 创建封锁区或禁航区的自增命名序号
+        self.__reference_point_index_increment = 1  # 创建参考点的自增命名序号
+        self.units = {}  # key:unit guid, value: Unit instance
+        self.missions = {}  # key:key:mission name, value: Mission instance
+        self.pointname2location = {}  # key: reference point name, value:tuple, (lat, lon)
+        self.strike_missions = {}
+        self.support_missions = {}
+        self.patrol_missions = {}
+        self.groups = {}  # key:group guid, value: Group instance
+        self.reference_points = {}  # key: point guid, value:ReferencePoint instance
+        self.aircrafts = {}  # key:unit guid, value: Unit instance
+        self.facilitys = {}  # key:unit guid, value: Unit instance
+        self.contacts = {}  # key:contact guid, value, contact instance
+        self.weapons = {}
+        self.doctrine = None
+        self.weather = None
+        self.logged_messages = {}
+        self.current_point = 0  # 当前得分
+        self.point_record = []  # 得分记录
+        self.simulate_time = ""  # 当前推演时间
+        self.last_step_missing = {}  # 当前决策步损失的单元（我方），丢掉或击毁的单元（敌方）
+        self.last_step_new = {}  # 当前决策步新增的单元（我方），新增的情报单元（敌方）
+        self.all_units = {}
+        self.activeunit  = {}
+        self.strName = side_name  # 名称
+        self.strGuid = ''  # Guid
+        self.m_PosturesDictionary=[]#获取针对其它推演方的立场     
+        self.m_Doctrine=[]#作战条令                                   
+        self.m_ProficiencyLevel=[]
+        self.m_AwarenessLevel=[]
+        self.m_PosturesDictionary=[]
+        self.iTotalScore=0.0
+        self.m_Expenditures=[]#战损           
+        self.m_Losses=[]#战耗
+        self.iScoringDisaster=0.0# 完败阀值          
+        self.iScoringTriumph=0.0#完胜阀值
+        self.bCATC=False#自动跟踪非作战单元
+        self.bCollectiveResponsibility=False#集体反应
+        self.bAIOnly=False#只由计算机扮演
+        self.strBriefing=''#简要 
+        self.strCloseResult=''#战斗结束后的结果          
+        self.fCamerAltitude=0.0#中心点相机高度  
+        self.fCenterLatitude=0.0 #地图中心点纬度
+        self.fCenterLongitude=0.0 #地图中心点经度 
+        self.strSideColorKey='' #推演方颜色Key
+        self.strFriendlyColorKey='' #友方颜色Key 
+        self.strNeutralColorKey='' #中立方颜色Key
+        self.strUnfriendlyColorKey =''#非友方颜色Key
+        self.strHostileColorKey='' #敌方颜色Key 
+        self.iSideStopCount =0 #推演方剩余停止次数                              
+        self.m_ScoringLogs =[]
+        self.m_ContactList=[]#所有的目标
+        self.m_WarDamageOtherTotal=[] #战损的其它统计，包含但不限于(统计损失单元带来的经济和人员损失)
+        
+
+    def scenEdit_getScore(self,side_name,mozi_task):
+        '''
+        获取方的分数  
+        param: 
+        side_name ：要获取的方的分数
+        mozi_task ：调用服务器的基础类
+        return ：60(分数)
+        
+        '''
+        lua_str = '''ret = ScenEdit_GetScore("%s")
+                print(ret)
+                ''' % (side_name)
+        return float(self.mozi_task.sendAndRecv(lua_str))
+
+    
+   
+    def scenEdit_SetScore(self,sideName,score):
+        '''
+        设置指定阵营的分数
+        LUA_ScenEdit_SetScore  (side, score, reason)
+        ScenEdit_GetScore("PlayerS        ide", 20)
+        '''
+        return self.mozi_task.sendAndRecv("ReturnObj(ScenEdit_SetScore('{}',{}))".format(sideName,score))
+
+    def initial_units(self):
+        """
+        创建实体、任务
+        :return:
+        """
+        units = self.get_units()
+        for guid, name in units.items():
+            new_unit = Unit(guid, name, self.side_name, ElementType.Facility)  # test: facility
+            new_unit.set_mozi_interface(self.mozi_task)
+            self.units[guid] = new_unit
+
+    def delete_element(self, del_guid, element_type):
+        """
+        删除对象
+        :return:
+        """
+        # 记录本次步进删除的对象guid
+        if element_type in (ElementType.Aircraft, ElementType.Facility, ElementType.Weapon, ElementType.Group, ElementType.Contact):
+            record_guid = del_guid
+            if element_type == ElementType.Contact:
+                record_guid = self.contacts[del_guid].m_ActualUnit
+
+            if element_type not in self.last_step_missing:
+                self.last_step_missing[element_type] = set()
+            self.last_step_missing[element_type].add(record_guid)
+
+        # 删除对象
+        if element_type == ElementType.Aircraft:
+            del_list = self.aircrafts[del_guid].delete_sub_object()
+            del self.aircrafts[del_guid]
+        elif element_type == ElementType.Facility:
+            del_list = self.facilitys[del_guid].delete_sub_object()
+            del self.facilitys[del_guid]
+        elif element_type == ElementType.SupportMission:
+            del_list = self.support_missions[del_guid].delete_sub_object()
+            del self.support_missions[del_guid]
+        elif element_type == ElementType.StrikeMission:
+            del_list = self.strike_missions[del_guid].delete_sub_object()
+            del self.strike_missions[del_guid]
+        elif element_type == ElementType.PatrolMission:
+            del_list = self.patrol_missions[del_guid].delete_sub_object()
+            del self.patrol_missions[del_guid]
+        elif element_type == ElementType.Weapon:
+            del_list = self.weapons[del_guid].delete_sub_object()
+            del self.weapons[del_guid]
+        elif element_type == ElementType.Group:
+            del_list = self.groups[del_guid].delete_sub_object()
+            del self.groups[del_guid]
+        elif element_type == ElementType.ReferencePoint:
+            del_list = []
+            del self.reference_points[del_guid]
+        elif element_type == ElementType.Contact:
+            del_list = []
+            del self.contacts[del_guid]
+        else:
+            # logging.info("player delete element:{}".format(element_type))
+            del_list = []
+        del_list.append(del_guid)
+
+        return del_list
+
+    # def get_current_time(self):
+    #     """
+    #     获取当前时间
+    #     :return: str, format: %Y/%m/%d %H:%M:%S
+    #     """
+    #     current_time = self.mozi_task.sendAndRecv("ReturnObj(ScenEdit_CurrentTime())")
+    #     return cf.get_scenario_time(current_time)
+
+    def set_simulate_time(self, str_simulate_time):
+        '''
+        设置环境时间
+        '''
+        self.simulate_time = str_simulate_time
+
+   
+    def get_mission_by_name(self, mission_name):
+        """
+        通过任务名获取任务对象
+        :return:
+        """
+        if mission_name in self.missions:
+            return self.missions[mission_name]
+        else:
+            return None
+
+    def __units_parser(self, units_return_str):
+        """
+        解析返回的实体字符串
+        :param units_return_str: str, lua执行后返回的实体单元字符串
+        :return: dict, {guid: name}  例：{"fj-2f":"su-27", "er-2j":"su-35"}
+        """
+        unit_dict = {}
+        g_index = units_return_str.find('guid')
+        n_index = units_return_str.find('name')
+        if g_index < n_index:
+            units = guid_pattern.findall(units_return_str)
+            for unit in units:
+                unit_guid = unit[0]
+                unit_name = unit[1]
+                unit_dict[unit_guid] = unit_name
+        else:
+            units = name_pattern.findall(units_return_str)
+            for unit in units:
+                unit_name = unit[0]
+                unit_guid = unit[1]
+                unit_dict[unit_guid] = unit_name
+        return unit_dict
+
+    def get_units(self):
+        """
+        获取本方所有实体guid，name
+        :return: dict, {guid: name}  例：{"fj-2f":"su-27", "er-2j":"su-35"}
+        """
+        lua_arg = "print(VP_GetSide({side = '%s'}).units)" % self.side_name
+        return self.mozi_task.sendAndRecv(lua_arg)
+
+    def get_unit_byguid(self, guid):
+        """
+        获取实体
+        :param guid: str, 实体guid/
+        :return: Unit, 作战单元
+        """
+        if self.units:
+            if guid in self.units:
+                return self.units[guid]
+            else:
+                self.initial_units()
+                if guid in self.units:
+                    return self.units[guid]
+                else:
+                    return None
+        else:
+            if guid in self.aircrafts:
+                return self.aircrafts[guid]
+            if guid in self.facilitys:
+                return self.facilitys[guid]
+            if guid in self.weapons:
+                return self.weapons[guid]
+            return None
+
+    def get_contact(self, contact_guid):
+        """
+        获取情报对象
+        :param contact_guid:  情报对象guid, 非实际单元guid
+        :return:
+        """
+        if contact_guid in self.contacts:
+            return self.contacts[contact_guid]
+        else:
+            return None
+
+
+    def get_contacts(self):
+        """
+        获取本方当前已知的所有情报实体
+        :return: dict, {'guid':'name'}
+        """
+        lua_arg = "print(VP_GetSide({side = '%s'}).contacts)" % self.side_name
+        return self.mozi_task.sendAndRecv(lua_arg)
+
+
+    def get_elevation(self, coord_point):
+        """
+        获取某点（纬经度）
+        :param coord_point: tuple, (float, float) (lat, lon)
+        :return: int, 地形高程数据
+        """
+        lua_cmd = "ReturnObj(World_GetElevation ({latitude='%lf',longitude='%lf'}))" % (coord_point[0], coord_point[1])
+        return int(self.mozi_task.sendAndRecv(lua_cmd))
+
+    def reference_point_add(self, points):
+        """
+        添加一个或多个参考点
+        :param points: tuple, 或list,  参考点列表,例:(40.2, 49.6) 或 [(40, 39.0), (41, 39.0)]，其中纬度值在前，经度值在后
+                                                或者 (40.2, 49.6, 'RP002') 或 [(40, 39.0, 'RP1'), (41, 39.0, 'RP2')]，已传入参考点命名
+        :return:
+        ['point_name1','point_name2']点集名称
+        """
+        if not points:
+            return None
+
+        points_name = None
+        if isinstance(points, tuple):
+            # 判断参数是否元组
+            if len(points) == 2:
+                points_name = "RP_AUTO_CREATE%d" % self.__reference_point_index_increment
+                self.__reference_point_index_increment += 1
+                self.pointname2location[points_name] = points
+            elif len(points) == 3:
+                points_name = points[2]
+                self.pointname2location[points_name] = points[0:2]
+            else:
+                return None
+            self.mozi_task.addReferencePoint(side=self.side_name, pointName=points_name,
+                                             lat=points[0], lon=points[1],highlighted='true')
+        elif isinstance(points, list):
+            # 判断参数是否参考点列表
+            points_name = []
+            for point in points:
+                if isinstance(point, tuple):
+                    p_name = self.reference_point_add(point)
+                    if p_name is not None:
+                        points_name.append(p_name)
+        return points_name
+
+    def set_reference_point(self, rp_name, new_coord):
+        """
+        设置参考点的位置
+        :param rp_name: str, 参考点名称
+        :param new_coord: tuple, 新的经纬度位置 (lat, lon)
+        :return:
+        """
+        set_str = "ScenEdit_SetReferencePoint({{side='{}',name='{}', lat={}, lon={}}})".format(self.side_name, rp_name, new_coord[0], new_coord[1])
+        self.pointname2location[rp_name] = new_coord
+        return self.mozi_task.sendAndRecv(set_str)
+
+    def delete_reference_point(self, rp_name):
+        """
+        删除参考点
+        :param rp_name:  str, 参考点名称
+        :return:
+        """
+        set_str = 'ScenEdit_DeleteReferencePoint({name="%s",side="%s"})'%(rp_name, self.side_name)
+        del self.pointname2location[rp_name]
+        return self.mozi_task.sendAndRecv(set_str)       
+        
+   
+    def scenEdit_addMission(self ,side,missionName,model,detailed):
+        '''
+         #新建任务 complate
+        '''
+        add_mission = "ReturnObj(ScenEdit_AddMission('{}','{}','{}',{}))".format(side,missionName,model,detailed)
+        return self.mozi_task.sendAndRecv(add_mission)
+
+
+    def add_prosecution_zone(self, mission_name, point_list):
+        """
+        增加巡逻任务的警戒区
+        :param mission_name: str, 任务名
+        :param point_list: list, list, 参考点列表,例:[(40, 39.0), (41, 39.0), (41, 40.0), (40, 40.0)]，其中纬度值在前，经度值在后，(40, 39.0)中,latitude = 40, longitude = 39.0
+                            或者[(40, 39.0, 'RP1'), (41, 39.0, 'RP2'), (41, 40.0, 'RP3'), (40, 40.0, 'RP4')]
+                            或者['RP1', 'RP2'，'RP3'，'RP4']，传入参考点名称要求提前创建好参考点
+        :return:
+        """
+        self.mozi_task.setMission(self.side_name, mission_name,
+                                    '{' + self.__get_zone_str(point_list).replace('Zone', 'prosecutionZone') + '}')
+
+
+    def create_strike_mission(self, name, mission_type):
+        """
+        创建打击任务
+        :param name: str, 任务名
+        :param mission_type: MissionStrikeType, 打击任务类型，对空打击，对地打击等
+        :return: Mission, 任务实体
+        """
+        if name in self.missions:
+            raise OperationError("mission %s have exist" % name)
+
+        type_str = mission_strike_type_dict[mission_type]
+        if mission_type.value >= 6011:
+            raise OperationError("mission %s have exist" % name)
+        description = ('{type="%s"}' % type_str)
+        mission_ret = self.mozi_task.createMission(self.side_name, name, "strike", description)
+        return self.__save_mission(name, mission_ret, ElementType.StrikeMission)
+
+    def create_support_mission(self, name, point_list):
+        """
+        创建支援任务, 例子：
+            create_support_mission('空中支援', [(40, 39.0), (41, 39.0), (41, 40.0), (40, 40.0)])
+        :param name: str, 任务名
+        :param point_list: list, 参考点列表,例:[(40, 39.0), (41, 39.0), (41, 40.0), (40, 40.0)]，其中纬度值在前，经度值在后，(40, 39.0)中,latitude = 40, longitude = 39.0
+                            或者[(40, 39.0, 'RP1'), (41, 39.0, 'RP2'), (41, 40.0, 'RP3'), (40, 40.0, 'RP4')]
+                            或者['RP1', 'RP2'，'RP3'，'RP        4']，传入参考点名称要求提前创建好参考点
+        :return: Mission, 任务实体
+        """
+        points_str = '{ %s }' % self.__get_zone_str(point_list)
+        mission_ret = self.mozi_task.createMission(self.side_name, name, "Support", points_str)
+        return self.__save_mission(name, mission_ret, ElementType.SupportMission)
+
+    def __save_mission(self, mission_name, mission_return_str, mission_category):
+        """
+        保存任务到本方，方便以后调用
+        :param mission_name: 任务名
+        :param mission_return_str: 任务调用返回值
+        :return: Mission, Mission实例
+        """
+        mission_guid = cf.mission_guid_parser(mission_return_str)
+        new_mission = Mission(mission_guid, mission_name, self.side_name, mission_category)
+        new_mission.set_mozi_interface(self.mozi_task)
+        self.missions[mission_name] = new_mission
+        return new_mission
+
+    def delete_mission(self, mission_name):
+        """
+        删除任务
+        :param mission_name: str, 任务名称
+        :return:
+        """
+        lua = 'print(ScenEdit_DeleteMission("%s", "%s"))' % (self.side_name, mission_name)
+        self.mozi_task.sendAndRecv(lua)
+        del self.missions[mission_name]
+
+
+    def zone_remove(self, zone_guid):
+        """
+        删除禁航区或封锁区域
+        :param zone_guid: str, 区域的guid
+        :return:
+        """
+        return self.mozi_task.removeZone(self.side_name, zone_guid)
+
+    def zone_add_no_navigate(self, reference_points, **kwargs):
+        """
+        定义禁航区
+        :param reference_points:list, 参考点列表
+        :param kwargs:  Isactive：int 是否启用1='true', 0='false'
+                        Affects：int 选定区域应用于(0=Aircraft飞机；Submarine潜艇；1=Facility地面单元；Ship水面舰艇)
+                        Locked：int 是否区域已锁定1='true', 0=  'false' (只有禁航区才需要设置)
+        :return:str, zone guid
+        """
+        point_names = self.reference_point_add(reference_points)
+        point_count = len(point_names)
+        if not point_count:
+            return None
+
+        area_description = 'Area={"'
+        for name in point_names[: point_count-1]:
+            area_description += name + '","'
+        name = point_names[-1]
+        area_description += name + '"}'
+
+        table_arg = '{'
+        table_arg += ('Description="禁航区' + str(self.__zone_index_increment)) + '",' + area_description + '}'
+        self.__zone_index_increment += 1
+        zone_guid = self.mozi_task.addZone(self.side_name, '0', table_arg)
+        if len(kwargs) > 0:
+            self.zone_set(zone_guid, kwargs)
+        else:
+            self.zone_set(zone_guid, Isactive=1, Affects=0, Locked=0)
+        return zone_guid
+
+    def zone_add_exclusion(self, reference_points, **kwargs):
+        """
+        定义封锁区
+        :param reference_points:list, 参考点列表
+        :param kwargs:  Isactive：int 是否启用1='true', 0='false'
+                        Affects：int 选定区域应用于(0=Aircraft飞机；Submarine潜艇；1=Facility地面单元；Ship水面舰艇)
+                        Locked：int 是否区域已锁定1='true', 0=  'false' (只有禁航区才需要设置)
+        :return:str, zone guid
+        """
+        point_names = self.reference_point_add(reference_points)
+        point_count = len(point_names)
+        if not point_count:
+            return None
+
+        area_description = 'Area={"'
+        for name in point_names[: point_count - 1]:
+            area_description += name+'","'
+        name = point_names[-1]
+        area_description += name+'"}'
+
+        table_arg = '{'
+        table_arg += ('Description="封锁区' + str(self.__zone_index_increment)) + '",' + area_description + '}'
+        self.__zone_index_increment += 1
+        zone_guid = self.mozi_task.addZone(self.side_name, '1', table_arg)
+        if len(kwargs) > 0:
+            self.zone_set(zone_guid, kwargs)
+        else:
+            self.zone_set(zone_guid, Isactive=1, Affects=0, Locked=0)
+        return zone_guid
+
+    def zone_set(self, zone_guid, **kwargs):
+        """
+        修改禁航区和封锁区
+        :param zone_guid: 禁航区和封锁区的guid
+        :param kwargs:  Area：list 添加地图中选择的参考点(向区域列表中添加)(暂不支持,想要修改点请先删除再新建)
+                        Description: string 名字
+                        Isactive：int 是否启用1='true', 0='false'
+                        Affects：int 选定区域应用于(0=Aircraft飞机；Submarine潜艇；1=Facility地面单元；Ship水面舰艇)
+                        Locked：int 是否区域已锁定1='true', 0='false' (只有禁航区才需要设置)
+                        MarkAs： int 2=非友方，3=敌方（封锁区才有的设置）
+                        RPVISIBLE: int 1=true 0=false
+        :return:
+        """
+        table = '{'
+        for key, value in kwargs.items():
+            if key == 'Isactive':
+                if value == 1:
+                    table += ',Isactive=true'
+                elif value == 0:
+                    table += ',Isactive=false'
+            if key == 'Affects':
+                if value == 0:
+                    table += ',Affects={"Aircraft"}'
+                elif value == 1:
+                    table += ', Affects={"Ship"}'
+            if key == 'MarkAs':
+                if value == 2:
+                    table += ', MarkAs=2'
+                elif value == 3:
+                    table += ', MarkAs=3'
+            if key == 'RPVISIBLE':
+                if value == 1:
+                    table += ",RPVISIBLE=true"
+                elif value == 0:
+                    table += ",RPVISIBLE=false"
+            if key == 'Locked':
+                if value == 1:
+                    table += ', Locked=true'
+                elif value == 0:
+                    table += ', Locked=false'
+        if table[1] == ',':
+            table = table.replace(',', '', 1)
+        table += '}'
+        return self.mozi_task.setZone(self.side_name, zone_guid, table)
+
+    def group_add(self, list_unit_guid):
+        """
+        将多个单元作为一个编队
+        :param list_unit_guid: list, 例：['2abc947e-8352-4639-9184-641706730018','640a7c08-a17a-4fba-b055        -07b568f22df5']
+        :return:
+        """
+        list_unit_guid = str(list_unit_guid).replace('[', '{').replace(']', '}')
+        return self.mozi_task.scenEdit_AddGroup(list_unit_guid)
+
+
+
+    def group_add_unit(self, group_guid, unit_guid):
+        """
+        编队添加一个单元
+        :param group_guid: 编队guid
+        :param unit_guid: 作战单元guid
+        :return:
+        """
+        table = '{guid="' + unit_guid + '",group="' + group_guid + '"}'
+        lua_scrpt = "ScenEdit_SetUnit({})".format(table)
+        return self.mozi_task.sendAndRecv(lua_scrpt)
+
+    
+    def air_group_out(self, air_guid_list):
+        """
+        编组出动
+        :param air_guid_list:  list, 飞机的guid，  例子：['71136bf2-58ba-4013-92f5-2effc99d2wds','71136bf2-58ba-4013-92f5-2effc99d2fa0']
+        :return:
+        """
+        table = str(air_guid_list).replace('[', '{').replace(']', '}')
+        lua_scrpt = "Hs_LUA_AirOpsGroupOut('{}',{})".format(self.side_name, table)
+        return self.mozi_task.sendAndRecv(lua_scrpt)
+
+    def hold_position_all_unit(self, is_hold):
+        """
+        保持所有单元阵位，所有单元停止机动，留在原地
+        :param is_hold: bool
+        :return:
+        """
+        return self.mozi_task.sendAndRecv("Hs_HoldPositonAllUnit('{}',{})".format(self.side_name, str(is_hold).lower()))
+
+
+    def scenEdit_setEvent(self, eventName, model):
+        '''
+        #创建和设置事件 eventname为事件名称 
+        #eventTableMode为{mode='add',IsActive = false, IsRepeatable=true, Probability =100,IsShown = false} 
+        # mode 是类型 添加删除修改之类的 isactive 是否激活  IsRepeatable 是否重复 Probability概率 IsShown是否显示
+        返回乱执行是否成功 （string）
+        '''        
+        return self.mozi_task.sendAndRecv("ScenEdit_SetEvent ('%s',{mode='%s'})" % (eventName,model))
+    
+
+    def scenEdit_setAction(self, actionTableMode):
+        '''
+        创建动作和设置动作
+        actionTableMode 为{Description='想定结束',mode='add',type='endscenario'}
+        Description 动作名称 mode 操作类型 类似有添加删除 type为类型 有想定结束单元移动等
+        返回乱执行是否成功 （string）
+        '''        
+        return self.mozi_task.sendAndRecv(" ScenEdit_SetAction({})".format(actionTableMode))        
+    
+    
+    
+    def scenEditSetTrigger(self, triggerTableMode):
+        '''
+        创建和设置触发器
+        triggerTableMode 为 {Description='航母被摧毁',mode='add',type= "unitdestroyed",TargetFilter={TARGETSIDE="中国",TARGETTYPE="Ship"}}
+        Description 触发器名称 mode 操作类型同上 type触发器类型 类似有单元被摧毁 单元被毁伤之类的 
+        TargetFilter={TARGETSIDE="中国",TARGETTYPE="Ship"} 是单元被毁伤和单元被摧毁的 TARGETSIDE为单元所在方  TARGETTYPE 为类型还有子类型参数
+        返回乱执行是否成功 （string）
+        '''
+        return self.mozi_task.sendAndRecv("ScenEdit_SetTrigger ({})".format(triggerTableMode))        
+        
+        
+    
+
+    def scenEdit_setEventTrigger(self, eventName, mode , name , replacedby = None):
+        '''
+        为事件添加触发器
+        eventName 事件名称
+        triggername 触发器名称
+        mode 操作类型
+        返回乱执行是否成功 （string）
+        '''
+        lua_scrpt =''
+        if replacedby == None :
+            lua_scrpt =  "ScenEdit_SetEventTrigger('%s', {mode = '%s',name = '%s'})" %s (eventName,mode,name)
+        else:
+            lua_scrpt = "ScenEdit_SetEventTrigger('%s', {mode = '%s',name = '%s' ,replacedby= ''})" %s (eventName,mode,name,replacedby)
+        return self.mozi_task.sendAndRecv(lua_scrpt)
+                
+                
+                
+
+    def scenEditSetEventAction(self, eventName, mode ,name):
+        '''
+        为事件添加动作
+        eventName 事件名称
+        actionName 动作器名称
+        mode 操作类型
+        返回乱执行是否成功 （string）
+        '''
+        lua_scrpt = "ScenEdit_SetEventAction('%s', {mode = '%s',name = '%s'})" %s (eventName,mode,name) 
+        return self.mozi_task.sendAndRecv(lua_scrpt)         
+          
+    def addUnit(self, type, name, dbid, latitude, longitude):
+        ''' 
+        添加单元 complate
+        '''
+        lua_scrpt = ("ReturnObj(ScenEdit_AddUnit({side = '%s', type = '%s', name = '%s', dbid = %s, latitude = %s, longitude = %s}))"
+                     % (self.strName,type,name,dbid,latitude,longitude))
+        result =  self.mozi_task.sendAndRecv(lua_scrpt)
+      
+
+
+
+    def addAircarft(self, Type, name, dbid, latitude, longitude,loadoutid,heading,altitude):         
+        '''
+        添加飞机
+        '''               
+        lua_scrpt = ("ReturnObj(ScenEdit_AddUnit({type = '%s', name = '%s', loadoutid = %s, heading = %s, dbid = %s, side = '%s', Latitude=%s,Longitude=%s, altitude=%s))" 
+        % (Type,name,loadoutid,heading,dbid,self.strName,latitude,longitude,altitude))
+        # 发送lua脚本
+        result =  self.mozi_task.sendAndRecv(lua_scrpt)
+       
+
+    def addAirToFacility(self,type, name, dbid,loadoutid ,baseUnitGuid ):    
+        '''
+        往机场，码头添加单元       
+        '''
+        self.mozi_task.sendAndRecv("ReturnObj(ScenEdit_AddUnit({ type = '%s', unitname = '%s',side='%s', dbid = %s, loadoutid = %s, base = '%s'}))"
+                         %(type,name,self.strName,dbid,loadoutid,baseUnitGuid))
+
+
+    def delete_allUnit(self):
+        '''
+        删除本方所有单元
+        '''        
+        return self.mozi_task.sendAndRecv("Hs_DeleteAllUnits({})".format(self.strName))
+
+
+    def setEMCON(self, objectType, objectName, emcon):
+        '''
+        设置选定对象的 EMCON
+        objectType 对象类型 'Side' / 'Mission' / 'Group' / 'Unit'
+        objectName 对象名称 'Side Name or ID' / 'Mission Name or ID' / 'Group Name or ID' / 'Unit Name or ID'
+        emcon 传感器类型和传感器状态 'Radar/Sonar/OECM=Active/Passive;' / 'Inherit'
+        例 ：
+        ScenEdit_SetEMCON(['Side' / 'Mission' / 'Group' / 'Unit'], ['Side Name or ID' / 'Mission Name or ID' / 
+        'Group Name or ID' / 'Unit Name or ID'], ['Radar/Sonar/OECM=Active/Passive;' / 'Inherit'])
+        '''        
+        return self.mozi_task.sendAndRecv("ScenEdit_SetEMCON('{}','{}','{}')".format(objectType,objectName,emcon))                          
+                          
+    
+    def addReferencePoint(self, pointName, lat, lon):
+        '''
+        添加参考点
+        pointName 参考点名称
+        lat 纬度
+        lon 经度
+        '''
+        return self.mozi_task.sendAndRecv("ScenEdit_AddReferencePoint({side='%s', name='%s', lat=%s, lon=%s, highlighted=%s})"%(self.strName,pointName,lat,lon))
+                                        
+                                                          
+   
+          
+    def deployMine(self, mineType, mineCount, area):
+        '''
+        给某一方添加雷
+        mineType 类型
+        mineCount 数量
+        area table类型 布雷区域
+        '''
+        return self.sendAndRecv("Hs_DeployMine('{}','{}',{},{})".format(self.strName,mineType,mineCount,area))
+    
+                         
+    def addOn_flyZone(self, description, area):
+        '''
+        添加禁航区
+        description 禁航区名称
+        area 区域 area={"RP-112","RP-113","RP-114","RP-115"}
+        '''
+        return self.sendAndRecv(
+            "Hs_AddZone('%s', {Description = '%s', Area = %s})"%(self.strName,description,area))    
+
+
+    def cloneETAC(self, table):
+        '''
+        克隆事件、触发器、条件、动作
+        table  {CLONETRIGGER = '", triggerGuid, "'} { CLONEEVENT = '", eventGuid, "' } 
+        { CLONECONDITION = '", conditionGuid, "' }     { CLONEACTION = '", actionGuid, "' }
+        '''        
+        return self.sendAndRecv("Hs_CloneETAC({})".format(table))
+    
+
+    def reset_allSide_scores(self):
+        '''
+        重置所有推演方分数
+        '''        
+        return self.sendAndRecv("Hs_ResetAllSideScores()")
+
+
+    def reset_doctrine(self, GUID, LeftMiddleRight, EnsembleWeaponEMCON):
+        '''
+        Hs_ResetDoctrine 重置条令
+        GUID 为要设置的推演方、任务、单元、编组 GUID
+        LeftMiddleRight Left：重置作战条令，Middle 重置关联的作战单元，Right 重置关联的使命任务
+        EnsembleWeaponEMCON Ensemble：总体，EMCON 电磁管控设置，Weapon 武器使用规则
+        '''        
+        return self.sendAndRecv("Hs_ResetDoctrine('{}','{}','{}')".format(GUID,LeftMiddleRight,EnsembleWeaponEMCON))
+    
+    
+
+    def set_new_sideNaem(self, sideNewIdOrName):
+        '''
+        推演方重命名
+        sideNewIdOrName 新名称
+        '''        
+        return self.sendAndRecv("setNewSideNaem('{}','{}')".format(self.strName,sideNewIdOrName))

@@ -1,0 +1,26 @@
+# -*- coding:utf-8 -*-
+##########################################################################################################
+# File name : magazine.py
+# Create date : 2020-1-8
+# Modified date : 2020-1-8
+#All rights reserved:北京华戍防务技术有限公司
+#Author:xy
+##########################################################################################################
+
+class CMagazine():
+    '''弹药库'''
+    def __init__(self, guid, name, ParentPlatform):
+        #弹药库guid
+        self.guid = guid
+        # 弹药库名称
+        self.name = name
+        # 父平台guid
+        self.m_ParentPlatform = ParentPlatform
+        # 状态
+        self.m_ComponentStatus = 0
+        # 毁伤程度的轻,中,重
+        self.m_DamageSeverity = 0
+        # 覆盖角度
+        self.m_CoverageArc = ""
+        # 挂架已挂载的数量和挂架载荷
+        self.m_LoadRatio = ""
